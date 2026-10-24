@@ -1,0 +1,80 @@
+name: Build OfflineHub APK
+
+on:
+  push:
+    paths:
+      - 'offlinehub.zip'
+      - '.github/workflows/build-apk.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Locate and extract project
+        shell: bash
+        run: |
+          if [ -f offlinehub.zip ]; then
+            unzip -q offlinehub.zip -d app_src
+            APP_DIR="$(dirname "$(find app_src -maxdepth 2 -name package.json -not -path '*/node_modules/*' -print -quit)")"
+          else
+            APP_DIR="."
+          fi
+          if [ -z "$APP_DIR" ] || [ ! -f "$APP_DIR/package.json" ]; then
+            echo "Could not find the OfflineHub package.json" >&2
+            exit 1
+          fi
+          echo "APP_DIR=$APP_DIR" >> "$GITHUB_ENV"
+          echo "Building project at $APP_DIR"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install dependencies
+        working-directory: ${{ env.APP_DIR }}
+        run: npm install --no-audit --no-fund
+
+      - name: Run tests
+        working-directory: ${{ env.APP_DIR }}
+        run: npm test
+
+      - name: Type-check and build web bundle
+        working-directory: ${{ env.APP_DIR }}
+        run: npm run build
+
+      - name: Generate Android project and sync Capacitor
+        working-directory: ${{ env.APP_DIR }}
+        run: |
+          npx cap add android
+          npx cap sync android
+
+      - name: Build debug APK
+        working-directory: ${{ env.APP_DIR }}/android
+        run: ./gradlew --no-daemon assembleDebug
+
+      - name: Verify APK exists
+        shell: bash
+        run: test -s "${APP_DIR}/android/app/build/outputs/apk/debug/app-debug.apk"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OfflineHub-debug-APK
+          path: ${{ env.APP_DIR }}/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
+          
